@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "deploy-dev": {
+      "type": "http",
+      "url": "http://127.0.0.1:8701/mcp",
+      "headers": { "Authorization": "Bearer ${DEPLOY_DEV_TOKEN:-none}" }
+    },
+    "deploy-staging": {
+      "type": "http",
+      "url": "http://127.0.0.1:8702/mcp",
+      "headers": { "Authorization": "Bearer ${DEPLOY_STAGING_TOKEN:-none}" }
+    },
+    "deploy-prod": {
+      "type": "http",
+      "url": "http://127.0.0.1:8703/mcp",
+      "headers": { "Authorization": "Bearer ${DEPLOY_PROD_TOKEN:-none}" }
+    }
+  }
+}

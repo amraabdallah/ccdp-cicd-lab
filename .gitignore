@@ -4,3 +4,4 @@ out/
 triage.md
 .deploy-state/
 .env
+.venv/

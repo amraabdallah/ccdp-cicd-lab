@@ -1,0 +1,64 @@
+# Stage 1 — read-only judgment step (lesson: "start with read-only judgment steps").
+# Tests run on every push and pull request. Only when they FAIL does Claude run,
+# read the log, and write a short triage into the run's summary page.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:        # adds a "Run workflow" button in the Actions tab
+
+permissions:
+  contents: read            # the job can read the repo, nothing more
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test tools
+        run: pip install pytest
+
+      - name: Run tests
+        run: |
+          mkdir -p out
+          set -o pipefail
+          python -m pytest -v 2>&1 | tee out/build.log
+
+      # ---- everything below runs only if a step above failed ----
+
+      - name: Install Claude Code
+        if: failure()
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Triage failed build
+        if: failure()
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        # --allowedTools "Read"     : the only tool pre-approved — Claude can read files, nothing else
+        # --permission-mode dontAsk : anything not pre-approved is DENIED, so the job never waits for a human
+        # --max-turns / --model     : cap the cost of a single run
+        run: >
+          claude -p "Read the build log at out/build.log. Identify the most
+          likely cause, say whether the failure looks flaky or real, and write a
+          three-line summary for the PR thread."
+          --allowedTools "Read"
+          --permission-mode dontAsk
+          --model sonnet
+          --max-turns 5
+          >> triage.md
+
+      - name: Publish triage to the run summary
+        if: failure()
+        run: |
+          echo "## Claude triage" >> "$GITHUB_STEP_SUMMARY"
+          cat triage.md >> "$GITHUB_STEP_SUMMARY"

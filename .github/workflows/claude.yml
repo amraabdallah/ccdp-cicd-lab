@@ -1,0 +1,50 @@
+# Stage 2 — write steps behind the existing gates (lesson: "add write steps ... via @claude mentions").
+# Claude can change code, but only on its own branch. The ruleset on main means its work
+# reaches main only as a PR that passes the `test` check and that you approve.
+name: Claude (@claude mentions)
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened]
+
+jobs:
+  claude:
+    # Public repo: anyone can comment. Only YOU (the repo owner) can make Claude run,
+    # so strangers can't spend your API credit.
+    if: |
+      github.actor == github.repository_owner && (
+        (github.event_name == 'issue_comment'               && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'issues'                      && contains(github.event.issue.body, '@claude'))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write        # push to its own claude/... branch (the ruleset still blocks main)
+      pull-requests: write   # open / comment on PRs
+      issues: write          # reply in the issue
+      id-token: write        # used by the action to get its GitHub App token
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test tools (so Claude can run the tests)
+        run: pip install pytest
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Allowlist: read/edit files, and run ONLY the test command. No other shell commands.
+          claude_args: >-
+            --model sonnet
+            --max-turns 15
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(python -m pytest:*)"

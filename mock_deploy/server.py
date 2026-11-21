@@ -59,7 +59,10 @@ def save_state(state: dict) -> None:
 
 def audit(event: str, **details) -> None:
     line = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "env": ENV, "event": event,
-            "actor": os.environ.get("GITHUB_ACTOR", os.environ.get("USER", "local")), **details}
+            # actor = the identity that owns this environment's token (the agent's service account);
+            # triggered_by = the human whose push or click started the run. Kept separate on purpose.
+            "actor": f"svc-deploy-{ENV}" if event != "refused" else "unknown",
+            "triggered_by": os.environ.get("GITHUB_ACTOR", os.environ.get("USER", "local")), **details}
     with AUDIT_FILE.open("a") as f:
         f.write(json.dumps(line) + "\n")
 

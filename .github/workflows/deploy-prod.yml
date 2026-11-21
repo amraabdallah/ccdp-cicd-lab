@@ -1,0 +1,83 @@
+# Stage 5 — production. Started by hand (Actions tab -> Run workflow) with a change ticket.
+# `release` is NOT on the allowlist: the PreToolUse hook's allow is the only way through,
+# so if the hook denies, or fails to run, the release is denied. `rollback` stays on the
+# allowlist because it is a runbook approved in advance.
+name: Deploy to production
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: "Change ticket, e.g. CHG-7 (= issue #7)"
+        required: true
+      simulate_gate_crash:
+        description: "Lab only: make the hook crash, to prove production fails closed"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: read              # the hook reads the change ticket
+
+concurrency: production
+
+jobs:
+  production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Start the pretend deployment platform (dev, staging, prod)
+        env:
+          STATUS_WAIT_SECONDS: "5"
+        run: |
+          pip install -r requirements-deploy.txt
+          bash mock_deploy/start_all.sh
+
+      - name: Install Claude Code
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Release to production through the gate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEPLOY_PROD_TOKEN: ${{ secrets.DEPLOY_PROD_TOKEN }}      # no other environment's token
+          GH_TOKEN: ${{ github.token }}                            # read-only: lets the hook read the ticket
+          RELEASE_MANAGERS: ${{ vars.RELEASE_MANAGERS }}
+          SIMULATE_GATE_CRASH: ${{ inputs.simulate_gate_crash && '1' || '0' }}
+        run: >
+          claude -p "Release version ${{ github.sha }} of the claims portal to production
+          under change ticket ${{ inputs.ticket }}, then call status. If the 5xx rate on any
+          endpoint is over 1%, roll back. Reply with exactly three lines for the release notes:
+          what you released, what status reported, and whether you rolled back. If the release
+          is refused, say so and why, and stop."
+          --mcp-config .mcp.json --strict-mcp-config
+          --allowedTools "mcp__deploy-prod__status,mcp__deploy-prod__rollback"
+          --permission-mode dontAsk
+          --model sonnet --max-turns 10
+          >> release-notes.md
+
+      - name: Publish release notes, gate decisions and audit log
+        if: always()
+        run: |
+          {
+            echo "## Release notes (written by Claude)"
+            cat release-notes.md 2>/dev/null || echo "_none_"
+            echo
+            echo "## Production gate (PreToolUse hook) decisions"
+            echo '```'
+            cat .deploy-state/gate.log 2>/dev/null || echo "(no decision logged - the hook did not run or crashed)"
+            echo '```'
+            echo "## Platform audit log"
+            echo '```'
+            cat .deploy-state/*-audit.log 2>/dev/null || echo "(empty)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

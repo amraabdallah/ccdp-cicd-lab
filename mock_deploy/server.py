@@ -47,7 +47,10 @@ AUDIT_FILE = STATE_DIR / f"{ENV}-audit.log"
 def load_state() -> dict:
     if STATE_FILE.exists():
         return json.loads(STATE_FILE.read_text())
-    return {"history": []}   # each entry: {version, release_id, error_rates, released_at}
+    # A fresh runner has no history. Seed a healthy "previous release" so the very first
+    # release in a run still has something to roll back to - like a real platform would.
+    return {"history": [{"version": "previous-release", "release_id": f"rel-{ENV}-baseline", "ticket": None,
+                         "error_rates": {"/claims": 0.2, "/quotes": 0.1, "/payouts": 0.3}, "released_at": 0}]}
 
 
 def save_state(state: dict) -> None:

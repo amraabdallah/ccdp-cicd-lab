@@ -1,0 +1,69 @@
+# Stage 4 — the lesson's staging job.
+# Runs on every push to main. Pre-approves ONLY the staging server's three tools and holds
+# ONLY the staging token, so dev and prod refuse the job (403) and any other tool is denied.
+name: Deploy to staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency: staging          # never two staging releases at once
+
+jobs:
+  staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Start the pretend deployment platform (dev, staging, prod)
+        env:
+          STATUS_WAIT_SECONDS: "5"
+        run: |
+          pip install -r requirements-deploy.txt
+          bash mock_deploy/start_all.sh
+
+      - name: Install Claude Code
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Release to staging and roll back if it is unhealthy
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEPLOY_STAGING_TOKEN: ${{ secrets.DEPLOY_STAGING_TOKEN }}   # no other environment's token
+        # --mcp-config + --strict-mcp-config : the operator hands Claude exactly these servers on
+        #                                       the command line (nobody is here to "trust" the folder)
+        # --allowedTools                     : the staging server's three tools and nothing else
+        # --permission-mode dontAsk          : anything else is denied; the job never waits
+        run: >
+          claude -p "Release version ${{ github.sha }} of the claims portal to staging,
+          then call status. If the 5xx rate on any endpoint is over 1%, roll back.
+          Finish with three lines for the release notes: what you released, what status
+          reported, and whether you rolled back."
+          --mcp-config .mcp.json --strict-mcp-config
+          --allowedTools "mcp__deploy-staging__release,mcp__deploy-staging__status,mcp__deploy-staging__rollback"
+          --permission-mode dontAsk
+          --model sonnet --max-turns 10
+          >> release-notes.md
+
+      - name: Publish release notes and the platform's audit log
+        if: always()
+        run: |
+          {
+            echo "## Release notes (written by Claude)"
+            cat release-notes.md 2>/dev/null || echo "_none_"
+            echo
+            echo "## Platform audit log — what each environment saw"
+            echo '```'
+            cat .deploy-state/*-audit.log 2>/dev/null || echo "(empty)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

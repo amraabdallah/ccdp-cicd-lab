@@ -1,0 +1,80 @@
+# Stage 6 — rollback drill. Rollback should be the most rehearsed path in the pipeline:
+# the same single tool the agent would use in an incident, exercised regularly in staging,
+# and CHECKED by a plain script afterwards (we don't take the agent's word for it).
+name: Rollback drill (staging)
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"     # every Monday 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency: staging
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Start the pretend deployment platform
+        env:
+          STATUS_WAIT_SECONDS: "5"
+        run: |
+          pip install -r requirements-deploy.txt
+          bash mock_deploy/start_all.sh
+
+      - name: Install Claude Code
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Agent runs the drill (release, then roll back)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEPLOY_STAGING_TOKEN: ${{ secrets.DEPLOY_STAGING_TOKEN }}
+        run: >
+          claude -p "This is a scheduled rollback drill in staging. Release version
+          drill-${{ github.run_id }} of the claims portal to staging, then call rollback,
+          then call status. Reply with exactly three lines: the version you released,
+          the version live after the rollback, and what status reported."
+          --mcp-config .mcp.json --strict-mcp-config
+          --allowedTools "mcp__deploy-staging__release,mcp__deploy-staging__status,mcp__deploy-staging__rollback"
+          --permission-mode dontAsk
+          --model sonnet --max-turns 8
+          >> drill-notes.md
+
+      - name: Verify the drill independently (fails the job if rollback did not work)
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          from datetime import datetime
+          state = json.load(open(".deploy-state/staging.json"))
+          events = [json.loads(l) for l in open(".deploy-state/staging-audit.log")]
+          live = state["history"][-1]["version"]
+          rel = next((e for e in events if e["event"] == "release"), None)
+          rb  = next((e for e in events if e["event"] == "rollback"), None)
+          ok = rel is not None and rb is not None and live == "previous-release"
+          secs = (datetime.fromisoformat(rb["at"]) - datetime.fromisoformat(rel["at"])).total_seconds() if ok else None
+          with open("drill-result.md", "w") as f:
+              f.write(f"- Released: {rel and rel['version']}\n- Rolled back: {'yes' if rb else 'NO'}\n"
+                      f"- Live after drill: {live}\n- Release-to-rollback time: {secs} s\n"
+                      f"- **Drill {'PASSED' if ok else 'FAILED'}**\n")
+          sys.exit(0 if ok else 1)
+          PY
+
+      - name: Publish drill report
+        if: always()
+        run: |
+          {
+            echo "## Agent's report"; cat drill-notes.md 2>/dev/null || echo "_none_"; echo
+            echo "## Independent check"; cat drill-result.md 2>/dev/null || echo "_check did not run_"; echo
+            echo "## Platform audit log"; echo '```'; cat .deploy-state/staging-audit.log 2>/dev/null; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

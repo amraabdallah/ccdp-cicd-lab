@@ -2,6 +2,6 @@
   "error_rate_percent": {
     "/claims": 0.2,
     "/quotes": 0.1,
-    "/payouts": 0.3
+    "/payouts": 4.5
   }
 }
